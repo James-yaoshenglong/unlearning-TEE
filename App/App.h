@@ -61,7 +61,7 @@ extern "C" {
 
 int initialize_enclave(void);
 void destroy_enclave(void);
-void load_data(double* input, int, int);
+void load_data(float* input_data, float* input_label, int r, int c);
 void init_enclave_storage();
 
 #if defined(__cplusplus)

@@ -46,8 +46,10 @@ enclave {
 
     trusted {
         public void ecall_libcxx_functions(void);
-        public int cnn_inference_f32_cpp();
-		public void ecall_init_enclave_storage([user_check] double** input, int row, int col); //here pay attention
+        // public int cnn_inference_f32_cpp();
+        public void ecall_init_enclave_storage([user_check] float* input_data, [user_check] float* input_label, int row, int col);
+        public void ecall_training();
+        public void ecall_unlearning(uint64_t kid);
     };
 
     /* 
@@ -57,6 +59,7 @@ enclave {
      */
     untrusted {
         void ocall_print_string([in, string] const char *str);
+        void ocall_init_model_storage([user_check] float** model, int model_size);
     };
 
 };

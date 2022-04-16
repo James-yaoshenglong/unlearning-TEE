@@ -40,6 +40,7 @@ extern "C" {
 #endif
 
 void printf(const char *fmt, ...);
+int net_training_f32(int network[], float* data, float* label, float* input_weights, float* result_weights, int batch);
 
 #if defined(__cplusplus)
 }

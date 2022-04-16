@@ -32,7 +32,8 @@
 #include <stdarg.h>
 #include <stdio.h>      /* vsnprintf */
 #include <map>
-
+#include <vector>
+#include <algorithm>
 #include <sgx_trts.h>
 
 #include "Enclave.h"
@@ -47,11 +48,17 @@ class Key{
 public:
     Key(){}
 
-    Key(double* ptr, int col){
-        dataPtr = ptr;
-        len = col*sizeof(double);
+    Key(float* dptr, float*lptr, float* model_link, int col, int slice_num){
+        dataPtr = dptr;
+        labelPtr = lptr;
+        modelPtr = model_link;
+        slice = slice_num;
+        len = (col+1)*sizeof(float);
         // kid = hash(dataPtr);
-        kid = XXHash64::hash(ptr, len, 1); //here need set seed
+        float* temp = (float*)malloc((col+1)*sizeof(float*));
+        memcpy(temp, dataPtr, col*sizeof(float));
+        memcpy(temp+col, labelPtr, sizeof(float));
+        kid = XXHash64::hash(temp, len, 1); //here need set seed
         tag = 1;
         // seed = rand(); //here has problem, need set random seed
         sgx_read_rand((unsigned char *)&seed, 4);
@@ -61,19 +68,41 @@ public:
         return kid;
     }
 
-    double* getDataPtr(){
+    float* getDataPtr(){
         return dataPtr;
     }
+
+    float* getLabelPtr(){
+        return labelPtr;
+    }
+
+    void setTag(int num){
+        tag = num;
+    }
+
 private:
     uint64_t kid;
     uint64_t len;
     uint32_t tag;
     uint32_t seed;
-    double* dataPtr;
+    uint32_t slice;
+    float* dataPtr;
+    float* labelPtr;
+    float* modelPtr;
 };
 
 std::map<uint64_t, Key*> keyMap; //here do not know whether it is in the enclave and use enclave std lib
+std::vector<uint64_t> keyList;
 CuckooFilter<uint64_t, 12> filter(10000);
+
+int network[] = {1, 10, 1};
+int slice_size = 1;
+int model_num;
+std::vector<float*> model_storage;
+int model_size = 0;
+
+int r;
+int c;
 
 
 /* 
@@ -95,17 +124,79 @@ void ecall_libcxx_functions(void){
     return;
 }
 
-void ecall_init_enclave_storage(double** input, int row, int col){
+void ecall_init_enclave_storage(float* input_data, float* input_label, int row, int col){
+    r = row;
+    c = col;
+
+    // define the nework parameter
+    network[0] = col;
+    model_num = (row % slice_size + row) / slice_size;
+    
+    //initialize the model storage
+    for(int i=0; i< sizeof(network)/sizeof(int)-1; i++){
+        model_size += network[i]*network[i+1]*sizeof(float);
+    }
+
+    for(int i=0; i<model_num+1; i++){
+        float* temp;
+        ocall_init_model_storage(&temp, model_size);
+        model_storage.push_back(temp);
+    }
+
+    sgx_read_rand((unsigned char *)model_storage[0], model_size);
+
+    //initialize the key list
     for(int i=0; i < row; i++){
-        Key* key = new Key(input[i], i);
+        Key* key = new Key(input_data+(col*i), input_label+i, model_storage[i/slice_size], col, i/slice_size);
         // printf("%f\n", input[i][0]);
         // printf("%f\n", key->getDataPtr()[0]);
         keyMap[key->getKid()] = key;
+        keyList.push_back(key->getKid());
         filter.Add(key->getKid());
         printf("%d", filter.Contain(key->getKid() == cuckoofilter::Ok));
     }
-    // printf("%f\n", input[1][0]);
-    // Key* test = keyMap.find(1)->second;
-    // printf("%f\n",test->getDataPtr()[0]);
-    // printf("%d\n", keyMap.find(1)->first);
+}
+
+void ecall_training(){
+    for(int i=0; i<keyList.size(); i+=slice_size){//here may need some check process
+        printf("%f\n", *(keyMap.find(keyList[i])->second->getDataPtr()));
+        printf("%f\n", *(model_storage[i/slice_size]));
+        int batch = slice_size<=keyList.size()-i?slice_size:keyList.size()-i;
+        net_training_f32(network, keyMap.find(keyList[i])->second->getDataPtr(), keyMap.find(keyList[i])->second->getLabelPtr(), model_storage[i/slice_size], model_storage[i/slice_size+1], batch);
+    }
+
+}
+
+void ecall_unlearning(uint64_t kid){
+    if(keyMap.find(kid) != keyMap.end()){
+        Key* temp = keyMap.find(kid)->second;
+        int index = std::find(keyList.begin(), keyList.end(), kid)-keyList.begin();
+
+        temp->setTag(0);
+        filter.Delete(kid);
+        
+        int batch = slice_size<=keyList.size()-index?slice_size-1:keyList.size()-(keyList.size()/slice_size)*slice_size-1;
+
+        //here may have bug with the last slice
+        float* tempSlice = (float*)malloc(batch*c*sizeof(float));
+        float* tempLabel = (float*)malloc(batch*sizeof(float));
+        
+        int firstHalf = index - (index / slice_size) * slice_size;
+        int secondHalf = (index / slice_size + 1) * slice_size - index -1;
+        float* dataPtr = temp->getDataPtr();
+        float* labelPtr = temp->getLabelPtr();
+        memcpy(tempSlice, dataPtr-firstHalf, firstHalf*c*sizeof(float));
+        memcpy(tempSlice+firstHalf*c, dataPtr+1, secondHalf*c*sizeof(float));
+        memcpy(tempLabel, labelPtr-firstHalf, firstHalf*sizeof(float));
+        memcpy(tempLabel+firstHalf, labelPtr+1, secondHalf*sizeof(float));
+
+        net_training_f32(network, tempSlice, tempLabel, model_storage[index/slice_size], model_storage[index/slice_size+1], batch);
+
+        for(int i=(index/slice_size+1)*slice_size; i<keyList.size(); i+=slice_size){//here may need some check process
+            printf("%f\n", *(keyMap.find(keyList[i])->second->getDataPtr()));
+            printf("%f\n", *(model_storage[i/slice_size]));
+            int batch = slice_size<=keyList.size()-i?slice_size:keyList.size()-i;
+            net_training_f32(network, keyMap.find(keyList[i])->second->getDataPtr(), keyMap.find(keyList[i])->second->getLabelPtr(), model_storage[i/slice_size], model_storage[i/slice_size+1], batch);
+        }
+    }
 }

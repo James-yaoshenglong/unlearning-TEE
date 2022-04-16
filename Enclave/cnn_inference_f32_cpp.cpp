@@ -72,7 +72,7 @@ static memory::dim product(const memory::dims &dims) {
             std::multiplies<memory::dim>());
 }
 
-static void simple_net(engine::kind engine_kind, int times = 100, int feature_num = 6) {
+static void simple_net(engine::kind engine_kind, int times, int network[], vector<float>& fc1w, vector<float>& fc2w, vector<float>& input, vector<float>& output, int b) {
     using tag = memory::format_tag;
     using dt = memory::data_type;
 
@@ -92,18 +92,21 @@ static void simple_net(engine::kind engine_kind, int times = 100, int feature_nu
     std::vector<std::unordered_map<int, memory>> net_fwd_args, net_bwd_args;
     //[Create network]
 
-    const memory::dim batch = 1;
+    const memory::dim batch = b;
+    const memory::dim feature_num = network[0];
+    const memory::dim fc1_node_num = network[1];
 
     // fc1 inner product {batch, feature_num} (x) {1000, feature_num}-> {batch, 1000}
     memory::dims fc1_src_tz = {batch, feature_num};
-    memory::dims fc1_weights_tz = {10, feature_num};
-    memory::dims fc1_bias_tz = {10};
-    memory::dims fc1_dst_tz = {batch, 10};
+    memory::dims fc1_weights_tz = {fc1_node_num, feature_num};
+    memory::dims fc1_bias_tz = {fc1_node_num};
+    memory::dims fc1_dst_tz = {batch, fc1_node_num};
 
     /// Allocate buffers for input and output data, weights, and bias.
     /// @snippet cnn_inference_f32.cpp Allocate buffers
     //[Allocate buffers]
     std::vector<float> user_src(batch * feature_num); //batch * feature_num
+    user_src = input;
     std::vector<float> user_dst(batch * 1);
     //[Allocate buffers]
 
@@ -114,7 +117,8 @@ static void simple_net(engine::kind engine_kind, int times = 100, int feature_nu
     auto user_src_memory = memory({{fc1_src_tz}, dt::f32, tag::nc}, eng);
     write_to_dnnl_memory(user_src.data(), user_src_memory);
 
-    std::vector<float> fc1_weights(product(fc1_weights_tz));
+    // std::vector<float> fc1_weights(product(fc1_weights_tz));
+    std::vector<float>& fc1_weights = fc1w;
     std::vector<float> fc1_bias(product(fc1_bias_tz));
 
     // initializing non-zero values for weights and bias
@@ -186,11 +190,12 @@ static void simple_net(engine::kind engine_kind, int times = 100, int feature_nu
 
 
     // fc2 inner product {batch, 1000} (x) {1, 1000}-> {batch, 1}
-    memory::dims fc2_weights_tz = {1, 10};
+    memory::dims fc2_weights_tz = {1, fc1_node_num};
     memory::dims fc2_bias_tz = {1};
     memory::dims fc2_dst_tz = {batch, 1};
 
-    std::vector<float> fc2_weights(product(fc2_weights_tz));
+    // std::vector<float> fc2_weights(product(fc2_weights_tz));
+    std::vector<float>& fc2_weights = fc2w;
     std::vector<float> fc2_bias(product(fc2_bias_tz));
 
     // initializing non-zero values for weights and bias
@@ -528,14 +533,35 @@ static void simple_net(engine::kind engine_kind, int times = 100, int feature_nu
     s.wait();
 }
 
-extern "C" int cnn_inference_f32_cpp() {
+// extern "C" int cnn_inference_f32_cpp() {
+//     try {
+//         int times = 2;   //SGX: change from 100 -> 1
+//         simple_net(parse_engine_kind(1, NULL), times, 6);
+//         printf("Intel(R) DNNL: cnn_inference_f32.cpp: passed\n");
+//     } catch (error &e) {
+//         // printf("%x\n", e);
+//         printf("Intel(R) DNNL: cnn_inference_f32.cpp: failed!!!\n");
+//     }
+//     return 0;
+// }
+
+
+int net_training_f32(int network[], float* data, float* label, float* input_weights, float* result_weights, int batch){
+    vector<float> fc1w(input_weights, input_weights+network[0]*network[1]);
+    vector<float> fc2w(input_weights+network[0]*network[1], input_weights+network[0]*network[1]+network[1]*network[2]);
+    vector<float> input(data, data+batch*network[0]);
+    vector<float> output(label, label+batch);
     try {
         int times = 2;   //SGX: change from 100 -> 1
-        simple_net(parse_engine_kind(1, NULL), times, 6);
+        simple_net(parse_engine_kind(1, NULL), times, network, fc1w, fc2w, input, output, batch);
         printf("Intel(R) DNNL: cnn_inference_f32.cpp: passed\n");
     } catch (error &e) {
         // printf("%x\n", e);
         printf("Intel(R) DNNL: cnn_inference_f32.cpp: failed!!!\n");
     }
+    memcpy(result_weights, fc1w.data(), fc1w.size()*sizeof(float));
+    memcpy(result_weights+fc1w.size(), fc2w.data() ,fc2w.size()*sizeof(float));
+        
+        
     return 0;
 }

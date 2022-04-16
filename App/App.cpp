@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
+#include <vector>
 
 # include <unistd.h>
 # include <pwd.h>
@@ -45,7 +46,8 @@
 sgx_enclave_id_t global_eid = 0;
 
 /* intermedian data storage */
-double ** data; 
+float * data;
+float * label; 
 int row;
 int col;
 
@@ -185,29 +187,30 @@ void destroy_enclave(void)
     sgx_destroy_enclave(global_eid);
 }
 
-void load_data(double* input, int r, int c){ //pay attention to double ** and double [][]
-    data = (double**)malloc(r*sizeof(double*));
-    for(int i=0; i<r; i++){
-        data[i] = (double*)malloc(c*sizeof(double));
-    }
-    for(int i=0; i<r; i++){
-        for(int j=0; j<c; j++){
-            data[i][j] = input[i*c+j];
-        }
-    }
+void load_data(float* input_data, float* input_label, int r, int c){ //pay attention to double ** and double [][]
+    data = (float*)malloc(r*c*sizeof(float));
+    label = (float*)malloc(r*sizeof(float));
+    memcpy(data, input_data, r*c*sizeof(float));
+    memcpy(label, input_label, r*sizeof(float));
     row = r;
     col = c;
     printf("data loaded into intermedian storage, size is (%d, %d)\n", r, c);
 }
 
 void init_enclave_storage(){
-    ecall_init_enclave_storage(global_eid, data, row, col);
+    ecall_init_enclave_storage(global_eid, data, label, row, col);
     sgx_status_t ret = SGX_SUCCESS;
     int retval = 0;
-    cnn_inference_f32_cpp(global_eid, &retval);
+    // cnn_inference_f32_cpp(global_eid, &retval);
+    ecall_training(global_eid);
+    ecall_unlearning(global_eid, 0);
     if(ret != SGX_SUCCESS){
         print_error_message(ret);
     }
+}
+
+void ocall_init_model_storage(float** model, int model_size){
+    *model =  (float*)malloc(model_size);
 }
 
 /* OCall functions */
