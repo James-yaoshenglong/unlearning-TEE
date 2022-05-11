@@ -53,7 +53,7 @@ else
 endif
 
 App_Cpp_Files := App/App.cpp
-App_Include_Paths := -IApp -I$(SGX_SDK)/include
+App_Include_Paths := -IApp -Iinclude -I$(SGX_SDK)/include
 
 App_C_Flags := -fPIC -Wno-attributes $(App_Include_Paths)
 
@@ -97,7 +97,7 @@ else
 endif
 Crypto_Library_Name := sgx_tcrypto
 
-Enclave_Cpp_Files := Enclave/Enclave.cpp Enclave/cnn_inference_f32_cpp.cpp  $(wildcard Enclave/cuckoofilter/*.cpp)
+Enclave_Cpp_Files := Enclave/Enclave.cpp Enclave/cnn_inference_f32_cpp.cpp Enclave/purchase_arch.cpp  $(wildcard Enclave/cuckoofilter/*.cpp)
 Enclave_Include_Paths := -IEnclave -Iinclude -Iinclude/cuckoofilter -I$(SGX_SDK)/include -I$(SGX_SDK)/include/libcxx -I$(SGX_SDK)/include/tlibc \
 	-I$(SGX_SSL)/include/ -include "tsgxsslio.h"
 

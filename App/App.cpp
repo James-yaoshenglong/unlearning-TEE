@@ -41,6 +41,7 @@
 #include "sgx_urts.h"
 #include "App.h"
 #include "Enclave_u.h"
+#include "data_structure.hpp"
 
 /* Global EID shared by multiple threads */
 sgx_enclave_id_t global_eid = 0;
@@ -198,7 +199,7 @@ void load_data(float* input_data, float* input_label, int r, int c){ //pay atten
 }
 
 void init_enclave_storage(){
-    ecall_init_enclave_storage(global_eid, data, label, row, col);
+    ecall_init_enclave_storage(global_eid, data, label, row, col, global_eid);
     sgx_status_t ret = SGX_SUCCESS;
     int retval = 0;
     // cnn_inference_f32_cpp(global_eid, &retval);
@@ -209,8 +210,10 @@ void init_enclave_storage(){
     }
 }
 
-void ocall_init_model_storage(float** model, int model_size){
-    *model =  (float*)malloc(model_size);
+void ocall_init_model_storage(void** model, int* network, int len){
+    Model** temp = (Model**)model;
+    Model* result = new Model(network, len);
+    *temp = result;
 }
 
 /* OCall functions */
