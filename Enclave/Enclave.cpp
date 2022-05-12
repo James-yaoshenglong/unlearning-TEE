@@ -43,6 +43,7 @@
 #include "cuckoofilter.h"
 #include "sha256.h"
 #include "data_structure.hpp"
+#include "purchase_arch.hpp"
 
 using cuckoofilter::CuckooFilter;
 
@@ -82,6 +83,14 @@ public:
         tag = num;
     }
 
+    int getSliceNum(){
+        return slice;
+    }
+
+    int getTag(){
+        return tag;
+    }
+
 private:
     uint64_t kid;
     uint64_t len;
@@ -97,18 +106,21 @@ std::map<uint64_t, Key*> keyMap; //here do not know whether it is in the enclave
 std::vector<Key*> keyList;
 CuckooFilter<uint64_t, 12> filter(100000);
 
-int network[] = {1, 128, 2};
-int slice_size = 1;
+int network[] = {1, 128, 1};
+int slice_size = 10000;
 int model_num;
 std::vector<Model*> model_storage;
-int model_size = 0;
+int real_count = 0;
+vector<int> slice_state;
 
 int r;
 int c;
 uint64_t eid;
 
-float* enclave_data_storage;
-float* enclave_label_storage;
+// float* enclave_data_storage;
+// float* enclave_label_storage;
+
+MLP* mlp;
 
 
 /* 
@@ -156,6 +168,7 @@ void ecall_init_enclave_storage(float* input_data, float* input_label, int row, 
     r = row;
     c = col;
     eid = enclave_id;
+    real_count = r;
 
     // define the nework parameter
     network[0] = col;
@@ -168,7 +181,10 @@ void ecall_init_enclave_storage(float* input_data, float* input_label, int row, 
         model_storage.push_back(temp);
     }
 
-    sgx_read_rand((unsigned char *)(model_storage[0]->storage), model_size);
+    // sgx_read_rand((unsigned char *)(model_storage[0]->storage), model_storage[0]->model_size);
+    for(int i=0; i<model_storage[0]->model_size; i++){
+        model_storage[0]->storage[i] = 0.01f;
+    }
 
     //initialize the key list
     for(int i=0; i < row; i++){
@@ -182,12 +198,13 @@ void ecall_init_enclave_storage(float* input_data, float* input_label, int row, 
         filter.Add(hash);
         // printf("%d", filter.Contain(hash) == cuckoofilter::Ok);
     }
+    // printf("fisrt kid is %ld\n",keyList[0]->getKid());
 }
 
 void ecall_training(){
     //load whole data
-    enclave_data_storage = (float*)malloc(r*c*sizeof(float));
-    enclave_label_storage = (float*)malloc(r*sizeof(float));
+    float* enclave_data_storage = (float*)malloc(r*c*sizeof(float));
+    float* enclave_label_storage = (float*)malloc(r*sizeof(float));
     int count = 0;
     for(int i=0; i<keyList.size(); i+=1){
         Key* key = keyList[i];
@@ -200,17 +217,82 @@ void ecall_training(){
     }
     printf("loaded data count is %d\n", count);
 
+    mlp = new MLP(network, 0.1f, 5000);
+    mlp->setModel(model_storage[0]);
+    for(int i=0; i<keyList.size(); i+=slice_size){
+        int size = keyList.size()<i+slice_size?keyList.size():i+slice_size;
+        int current_slice_size = keyList.size()<i+slice_size?keyList.size()%slice_size:slice_size;
+        // printf("size is %d\n", size);
+        slice_state.push_back(current_slice_size);
+        // printf("current slice size is %d\n", slice_state.back());
+        mlp->train(enclave_data_storage, enclave_label_storage, 20, size);
+        mlp->saveModel(model_storage[i/slice_size+1]);
+        // printf("%f\n", *(model_storage[0]->fc1w+1));
+        // printf("%f\n", *(model_storage[1]->fc1w+1));
+        printf("Save model %d\n", i/slice_size+1);
+    }
 
+    // mlp->forward(vector<float>(enclave_data_storage, enclave_data_storage+c));
+    mlp->getResult();
     // for(int i=0; i<keyList.size(); i+=slice_size){//here may need some check process
     //     printf("%f\n", *(keyMap.find(keyList[i])->second->getDataPtr()));
     //     printf("%f\n", *(model_storage[i/slice_size]));
     //     int batch = slice_size<=keyList.size()-i?slice_size:keyList.size()-i;
     //     net_training_f32(network, keyMap.find(keyList[i])->second->getDataPtr(), keyMap.find(keyList[i])->second->getLabelPtr(), model_storage[i/slice_size], model_storage[i/slice_size+1], batch);
     // }
-
+    
+    //don't know why here free not work
+    // free(enclave_data_storage);
+    // free(enclave_label_storage);
 }
 
 void ecall_unlearning(uint64_t kid){
+    if(keyMap.find(kid) != keyMap.end()){
+        Key* temp = keyMap.find(kid)->second;
+        uint64_t hash = xxsha256(temp, c, eid);
+        if(filter.Contain(hash) == cuckoofilter::Ok){
+            filter.Delete(hash);
+            temp->setTag(0);
+            slice_state[temp->getSliceNum()]--;
+            real_count--;
+
+            //reload data
+            float* data_storage = (float*)malloc(r*c*sizeof(float));
+            float* label_storage = (float*)malloc((r*2)*sizeof(float)); //don't know why exceed the length
+            int count = 0;
+            for(int i=0; i<keyList.size(); i+=1){
+                Key* key = keyList[i];
+                if(key->getKid() != temp->getKid() & key->getTag() != 0){
+                    uint64_t hash = xxsha256(key, c, eid);
+                    if(filter.Contain(hash) == cuckoofilter::Ok){
+                        memcpy(data_storage+count*c*sizeof(float), key->getDataPtr(), c*sizeof(float));
+                        memcpy(label_storage+count*sizeof(float), key->getLabelPtr(), sizeof(float));
+                        count++;
+                    }
+                }
+            }
+            printf("loaded data count is %d\n", count);
+            // printf("label storage is %f\n", *(enclave_label_storage+count-1));
+
+            //unlearning
+            int startSlice = temp->getSliceNum();
+            // printf("start slice is %d\n", startSlice);
+            mlp->setModel(model_storage[startSlice]);
+            int size = 0;
+            for(int i=0; i<slice_state.size(); i++){
+                size+=slice_state[i];
+                if(i>=startSlice){
+                    mlp->train(data_storage, label_storage, 2, size);
+                    mlp->saveModel(model_storage[i+1]);
+                    printf("Save model %d\n", i+1);
+                }
+            }
+            
+        }
+
+    }
+
+
     // if(keyMap.find(kid) != keyMap.end()){
     //     Key* temp = keyMap.find(kid)->second;
     //     int index = std::find(keyList.begin(), keyList.end(), kid)-keyList.begin();
