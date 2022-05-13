@@ -56,7 +56,7 @@ class MLP{
         void train(float* data, float* label, int epoch, int size);
         void setModel(Model* model);
         void saveModel(Model* model);
-        vector<int> getResult();
+        vector<float> inference(vector<float>& input);
         static memory::dim product(const memory::dims &dims) {
             return std::accumulate(dims.begin(), dims.end(), (memory::dim)1,
                     std::multiplies<memory::dim>());

@@ -225,7 +225,7 @@ void ecall_training(){
         // printf("size is %d\n", size);
         slice_state.push_back(current_slice_size);
         // printf("current slice size is %d\n", slice_state.back());
-        mlp->train(enclave_data_storage, enclave_label_storage, 20, size);
+        mlp->train(enclave_data_storage, enclave_label_storage, 10, size);
         mlp->saveModel(model_storage[i/slice_size+1]);
         // printf("%f\n", *(model_storage[0]->fc1w+1));
         // printf("%f\n", *(model_storage[1]->fc1w+1));
@@ -233,7 +233,17 @@ void ecall_training(){
     }
 
     // mlp->forward(vector<float>(enclave_data_storage, enclave_data_storage+c));
-    mlp->getResult();
+    vector<float> input(enclave_data_storage, enclave_data_storage+5000*c);
+    vector<float> result = mlp->inference(input);
+    int correct = 0;
+    for(int i=0; i<5000; i++){
+        if(result[i] == enclave_label_storage[i]){
+            correct++;
+        }
+    }
+    printf("correct is %d\n", correct);
+    
+    printf("label is %f %f\n", enclave_label_storage[0], result[0]);
     // for(int i=0; i<keyList.size(); i+=slice_size){//here may need some check process
     //     printf("%f\n", *(keyMap.find(keyList[i])->second->getDataPtr()));
     //     printf("%f\n", *(model_storage[i/slice_size]));
@@ -282,7 +292,7 @@ void ecall_unlearning(uint64_t kid){
             for(int i=0; i<slice_state.size(); i++){
                 size+=slice_state[i];
                 if(i>=startSlice){
-                    mlp->train(data_storage, label_storage, 2, size);
+                    mlp->train(data_storage, label_storage, 10, size);
                     mlp->saveModel(model_storage[i+1]);
                     printf("Save model %d\n", i+1);
                 }

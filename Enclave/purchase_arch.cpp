@@ -472,7 +472,15 @@ void MLP::saveModel(Model* model){
     memcpy(model->fc2b, fc2_bias.data(), fc2_bias.size()*sizeof(float));
 }
 
-vector<int> MLP::getResult(){
-    printf("result is %f %f\n", user_dst[0], user_dst[1]);
-    return vector<int>(); 
+vector<float> MLP::inference(vector<float>& input){
+    int temp = batch;
+    batch = input.size()/network[0];
+    forward(input);
+    vector<float> result(batch);
+    for(int i=0; i<batch; i++){
+        result[i] = user_dst[i]>0.5f?1.0f:0.0f;
+    }
+    // printf("result is %f %f\n", user_dst[0], user_dst[1]);
+    batch = temp;
+    return result; 
 }
