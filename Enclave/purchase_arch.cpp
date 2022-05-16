@@ -21,7 +21,7 @@ MLP::MLP(int arch[3], float a, int b){
     memcpy(network, arch, 3*sizeof(int));
     alpha = a;
     batch = b;
-    printf("alpha is %f\n", alpha);
+    // printf("alpha is %f\n", alpha);
 
     // const memory::dim batch = b;
     const memory::dim feature_num = network[0];
@@ -433,9 +433,9 @@ void MLP::backward(const vector<float>& label){
     // printf("%f\n", fc1_weights[0]);
 }
 
-void MLP::train(float* data, float* label, int epoch, int size){
+void MLP::train(float* data, float* label, int epoch, int size, Model* model){
     //current no shuffle, shuffle use twice much space
-    printf("size is %d\n", size);
+    // printf("size is %d\n", size);
     int temp = batch;
     for(int i=0; i<epoch; i++){
         for(int j=0; j<size; j+=batch){
@@ -446,6 +446,20 @@ void MLP::train(float* data, float* label, int epoch, int size){
             vector<float>input(data+start*network[0], data+end*network[0]);
             // printf("label is %f\n", *(label+end-1));
             vector<float>output(label+start, label+end);
+			
+			//deal with batch size different or directly discard
+			if(batch != temp){
+				int arch[3] = {600, 128, 1};
+				MLP another = MLP(arch, alpha, batch);
+				saveModel(model);
+				another.setModel(model);
+				another.forward(input);
+                another.backward(output);
+				another.saveModel(model);
+				setModel(model);
+				batch = temp;
+				continue;
+			}
             try {
                 forward(input);
                 backward(output);

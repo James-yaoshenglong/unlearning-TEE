@@ -199,6 +199,7 @@ void ecall_init_enclave_storage(float* input_data, float* input_label, int row, 
         // printf("%d", filter.Contain(hash) == cuckoofilter::Ok);
     }
     // printf("fisrt kid is %ld\n",keyList[0]->getKid());
+    printf("filter size is %d bytes\n", filter.SizeInBytes());
 }
 
 void ecall_training(){
@@ -210,8 +211,8 @@ void ecall_training(){
         Key* key = keyList[i];
         uint64_t hash = xxsha256(key, c, eid);
         if(filter.Contain(hash) == cuckoofilter::Ok){
-            memcpy(enclave_data_storage+i*c*sizeof(float), key->getDataPtr(), c*sizeof(float));
-            memcpy(enclave_label_storage+i*sizeof(float), key->getLabelPtr(), sizeof(float));
+            memcpy(enclave_data_storage+i*c, key->getDataPtr(), c*sizeof(float));
+            memcpy(enclave_label_storage+i, key->getLabelPtr(), sizeof(float));
             count++;
         }
     }
@@ -225,7 +226,7 @@ void ecall_training(){
         // printf("size is %d\n", size);
         slice_state.push_back(current_slice_size);
         // printf("current slice size is %d\n", slice_state.back());
-        mlp->train(enclave_data_storage, enclave_label_storage, 10, size);
+        mlp->train(enclave_data_storage, enclave_label_storage, 5, size, model_storage[i/slice_size+1]);
         mlp->saveModel(model_storage[i/slice_size+1]);
         // printf("%f\n", *(model_storage[0]->fc1w+1));
         // printf("%f\n", *(model_storage[1]->fc1w+1));
@@ -233,17 +234,17 @@ void ecall_training(){
     }
 
     // mlp->forward(vector<float>(enclave_data_storage, enclave_data_storage+c));
-    vector<float> input(enclave_data_storage, enclave_data_storage+5000*c);
-    vector<float> result = mlp->inference(input);
-    int correct = 0;
-    for(int i=0; i<5000; i++){
-        if(result[i] == enclave_label_storage[i]){
-            correct++;
-        }
-    }
-    printf("correct is %d\n", correct);
+    // vector<float> input(enclave_data_storage, enclave_data_storage+5000*c);
+    // vector<float> result = mlp->inference(input);
+    // int correct = 0;
+    // for(int i=0; i<5000; i++){
+    //     if(result[i] == enclave_label_storage[i]){
+    //         correct++;
+    //     }
+    // }
+    // printf("correct is %d\n", correct);
     
-    printf("label is %f %f\n", enclave_label_storage[0], result[0]);
+    // printf("label is %f %f\n", enclave_label_storage[0], result[0]);
     // for(int i=0; i<keyList.size(); i+=slice_size){//here may need some check process
     //     printf("%f\n", *(keyMap.find(keyList[i])->second->getDataPtr()));
     //     printf("%f\n", *(model_storage[i/slice_size]));
@@ -254,6 +255,25 @@ void ecall_training(){
     //don't know why here free not work
     // free(enclave_data_storage);
     // free(enclave_label_storage);
+}
+
+void ecall_predict(float* data, float* label, int size){
+    // mlp->setModel(model_storage[5]);
+    int correct = 0;
+    for(int i=0; i<size; i+=5000){
+        int start = i;
+        int end = i+5000<size?i+5000:size;
+        int batch = end-start;
+        vector<float> input(data+start*c, data+end*c);
+        vector<float> result = mlp->inference(input);
+        for(int j=0; j<batch; j++){
+            if(result[j] == label[start+j]){
+                correct++;
+            }
+        }
+    }
+    printf("correct is %d\n", correct);
+    printf("accuracy is %f\n", ((double)correct)/size);
 }
 
 void ecall_unlearning(uint64_t kid){
@@ -268,15 +288,15 @@ void ecall_unlearning(uint64_t kid){
 
             //reload data
             float* data_storage = (float*)malloc(r*c*sizeof(float));
-            float* label_storage = (float*)malloc((r*2)*sizeof(float)); //don't know why exceed the length
+            float* label_storage = (float*)malloc(r*sizeof(float)); //don't know why exceed the length
             int count = 0;
             for(int i=0; i<keyList.size(); i+=1){
                 Key* key = keyList[i];
-                if(key->getKid() != temp->getKid() & key->getTag() != 0){
+                if(key->getKid() != temp->getKid() && key->getTag() != 0){
                     uint64_t hash = xxsha256(key, c, eid);
                     if(filter.Contain(hash) == cuckoofilter::Ok){
-                        memcpy(data_storage+count*c*sizeof(float), key->getDataPtr(), c*sizeof(float));
-                        memcpy(label_storage+count*sizeof(float), key->getLabelPtr(), sizeof(float));
+                        memcpy(data_storage+count*c, key->getDataPtr(), c*sizeof(float));
+                        memcpy(label_storage+count, key->getLabelPtr(), sizeof(float));
                         count++;
                     }
                 }
@@ -292,7 +312,7 @@ void ecall_unlearning(uint64_t kid){
             for(int i=0; i<slice_state.size(); i++){
                 size+=slice_state[i];
                 if(i>=startSlice){
-                    mlp->train(data_storage, label_storage, 10, size);
+                    mlp->train(data_storage, label_storage, 5, size, model_storage[i+1]);
                     mlp->saveModel(model_storage[i+1]);
                     printf("Save model %d\n", i+1);
                 }

@@ -63,6 +63,9 @@ int initialize_enclave(void);
 void destroy_enclave(void);
 void load_data(float* input_data, float* input_label, int r, int c);
 void init_enclave_storage();
+uint64_t xxhash(char* content, int len);
+void unlearning(uint64_t kid);
+void predict(float* data, float* label, int size);
 
 #if defined(__cplusplus)
 }

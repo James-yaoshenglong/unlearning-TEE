@@ -53,7 +53,7 @@ class MLP{
         MLP(int arch[3], float a, int b);
         void forward(const vector<float>& input);
         void backward(const vector<float>& target);
-        void train(float* data, float* label, int epoch, int size);
+        void train(float* data, float* label, int epoch, int size, Model* model);
         void setModel(Model* model);
         void saveModel(Model* model);
         vector<float> inference(vector<float>& input);

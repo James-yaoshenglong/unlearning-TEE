@@ -50,6 +50,7 @@ enclave {
         public void ecall_init_enclave_storage([user_check] float* input_data, [user_check] float* input_label, int row, int col, uint64_t enclave_id);
         public void ecall_training();
         public void ecall_unlearning(uint64_t kid);
+        public void ecall_predict([user_check] float* data, [user_check] float* label, int size);
     };
 
     /* 

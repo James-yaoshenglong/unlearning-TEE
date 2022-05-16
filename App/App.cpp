@@ -42,6 +42,7 @@
 #include "App.h"
 #include "Enclave_u.h"
 #include "data_structure.hpp"
+#include "xxhash64.h"
 
 /* Global EID shared by multiple threads */
 sgx_enclave_id_t global_eid = 0;
@@ -204,7 +205,15 @@ void init_enclave_storage(){
     int retval = 0;
     // cnn_inference_f32_cpp(global_eid, &retval);
     ecall_training(global_eid);
-    ecall_unlearning(global_eid, 0);
+    if(ret != SGX_SUCCESS){
+        print_error_message(ret);
+    }
+}
+
+void unlearning(uint64_t kid){
+    sgx_status_t ret = SGX_SUCCESS;
+    int retval = 0;
+    ecall_unlearning(global_eid, kid);
     if(ret != SGX_SUCCESS){
         print_error_message(ret);
     }
@@ -214,6 +223,10 @@ void ocall_init_model_storage(void** model, int* network, int len){
     Model** temp = (Model**)model;
     Model* result = new Model(network, len);
     *temp = result;
+}
+
+void predict(float* data, float* label, int size){
+    ecall_predict(global_eid, data, label, size);
 }
 
 /* OCall functions */
@@ -252,5 +265,10 @@ int SGX_CDECL main(int argc, char *argv[])
     //printf("Enter a character before exit ...\n");
     //getchar();
     return 0;
+}
+
+
+uint64_t xxhash(char* content, int len){
+    return XXHash64::hash(content, len, 1);
 }
 
