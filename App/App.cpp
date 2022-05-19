@@ -31,6 +31,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <assert.h>
 #include <vector>
 
@@ -43,6 +44,8 @@
 #include "Enclave_u.h"
 #include "data_structure.hpp"
 #include "xxhash64.h"
+// #include "merklecpp.h"
+#include "merkletree.h"
 
 /* Global EID shared by multiple threads */
 sgx_enclave_id_t global_eid = 0;
@@ -189,6 +192,67 @@ void destroy_enclave(void)
     sgx_destroy_enclave(global_eid);
 }
 
+
+void ocall_get_time(double* current){
+    const double MILLION = 1000000.0;
+    const double THOUSAND = 1000.0;
+    struct timespec start;
+    clock_gettime(CLOCK_REALTIME, &start);
+    *current = start.tv_sec*MILLION+start.tv_nsec / THOUSAND;
+}
+
+
+void test_merkle_tree(){
+    char buffer[HASH_LENGTH];
+    // merkle::Tree tree;
+    double start, end;
+    // ocall_get_time(&start);
+    // for(int i=0; i<row; i++){
+    //     sprintf(buffer, "fa8f44eabb728d4020e7f33d1aa973faaef19de6c06679bccdc5100a3c0%05d", i);
+    //     merkle::Tree::Hash hash(buffer);
+    //     tree.insert(hash);
+    // }
+    // ocall_get_time(&end);
+    // printf("Total insert time for %d is %.8f ms and each need %.8f ms\n", row, end-start, (end-start)/row);
+
+    // auto root = tree.root();
+    // ocall_get_time(&start);
+    // for(int i=0; i<row; i++){
+    //     auto path = tree.path(0);
+    //     path->verify(root);
+    // }
+    // ocall_get_time(&end);
+    // printf("Total verify time for %d is %.8f ms and each need %.8f ms\n", row, end-start, (end-start)/row);
+    mt_t* tree = mt_create();
+    ocall_get_time(&start);
+    for(int i=0; i<row; i++){
+        sprintf(buffer, "aaaabbbbccccddddeeeeffffaa%05d", i);
+        mt_add(tree, (const unsigned char*)buffer, HASH_LENGTH);
+    }
+    ocall_get_time(&end);
+    printf("Total insert time for %d is %.8f ms and each need %.8f ms\n", row, end-start, (end-start)/row);
+    printf("after insertion size is %d\n", mt_get_size(tree));
+
+    ocall_get_time(&start);
+    for(int i=0; i<row; i++){
+        sprintf(buffer, "aaaabbbbccccddddeeeeffffaa%05d", i);
+        mt_verify(tree, (const unsigned char*)buffer, HASH_LENGTH, i);
+    }
+    ocall_get_time(&end);
+    printf("Total verify time for %d is %.8f ms and each need %.8f ms\n", row, end-start, (end-start)/row);
+
+    //use update replace delete
+    ocall_get_time(&start);
+    for(int i=0; i<row; i++){
+        sprintf(buffer, "%031d", 0);
+        mt_update(tree, (const unsigned char*)buffer, HASH_LENGTH, i);
+    }
+    ocall_get_time(&end);
+    printf("Total delete time for %d is %.8f ms and each need %.8f ms\n", row, end-start, (end-start)/row);
+
+    mt_delete(tree);
+}
+
 void load_data(float* input_data, float* input_label, int r, int c){ //pay attention to double ** and double [][]
     data = (float*)malloc(r*c*sizeof(float));
     label = (float*)malloc(r*sizeof(float));
@@ -197,6 +261,7 @@ void load_data(float* input_data, float* input_label, int r, int c){ //pay atten
     row = r;
     col = c;
     printf("data loaded into intermedian storage, size is (%d, %d)\n", r, c);
+    test_merkle_tree();
 }
 
 void init_enclave_storage(){

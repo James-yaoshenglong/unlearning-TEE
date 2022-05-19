@@ -91,6 +91,10 @@ public:
         return tag;
     }
 
+    int getSeed(){
+        return seed;
+    }
+
 private:
     uint64_t kid;
     uint64_t len;
@@ -104,12 +108,13 @@ private:
 
 std::map<uint64_t, Key*> keyMap; //here do not know whether it is in the enclave and use enclave std lib
 std::vector<Key*> keyList;
-CuckooFilter<uint64_t, 12> filter(100000);
+CuckooFilter<uint64_t, 8> filter(65536);
 
 int network[] = {1, 128, 1};
 int slice_size = 10000;
 int model_num;
 std::vector<Model*> model_storage;
+vector<int> slice_start_index;
 int real_count = 0;
 vector<int> slice_state;
 
@@ -164,6 +169,49 @@ uint64_t xxsha256(Key* key, int col, uint64_t enclave_id){
     return result;
 }
 
+void hashModel(Model* model, Key* key){
+    char* buffer = (char*)malloc(model->model_size+sizeof(uint32_t));
+    memcpy(buffer, model->storage, model->model_size);
+    uint32_t seed = key->getSeed();
+    memcpy(buffer+model->model_size, &seed, sizeof(uint32_t));
+    sha256_string(buffer, model->model_size+sizeof(uint32_t), model->hash);
+}
+
+int verifyModel(Model* model, Key* key){
+    char temp[33];
+    char* buffer = (char*)malloc(model->model_size+sizeof(uint32_t));
+    memcpy(buffer, model->storage, model->model_size);
+    uint32_t seed = key->getSeed();
+    memcpy(buffer+model->model_size, &seed, sizeof(uint32_t));
+    sha256_string(buffer, model->model_size+sizeof(uint32_t), temp);
+    strcmp(model->hash, temp);
+}
+
+void test_filter(){
+    CuckooFilter<uint64_t, 8> temp(65536);
+    double start, end;
+    ocall_get_time(&start);
+    for(int i=0; i<r; i++){
+        temp.Add(i);
+    }
+    ocall_get_time(&end);
+    printf("Total insert time for %d is %.8f ms and each need %.8f ms\n", r, end-start, (end-start)/r);
+
+    ocall_get_time(&start);
+    for(int i=0; i<r; i++){
+        temp.Contain(i);
+    }
+    ocall_get_time(&end);
+    printf("Total query time for %d is %.8f ms and each need %.8f ms\n", r, end-start, (end-start)/r);
+
+    ocall_get_time(&start);
+    for(int i=0; i<r; i++){
+        temp.Delete(i);
+    }
+    ocall_get_time(&end);
+    printf("Total delete time for %d is %.8f ms and each need %.8f ms\n", r, end-start, (end-start)/r);
+}
+
 void ecall_init_enclave_storage(float* input_data, float* input_label, int row, int col, uint64_t enclave_id){
     r = row;
     c = col;
@@ -200,6 +248,7 @@ void ecall_init_enclave_storage(float* input_data, float* input_label, int row, 
     }
     // printf("fisrt kid is %ld\n",keyList[0]->getKid());
     printf("filter size is %d bytes\n", filter.SizeInBytes());
+    test_filter();
 }
 
 void ecall_training(){
@@ -207,6 +256,8 @@ void ecall_training(){
     float* enclave_data_storage = (float*)malloc(r*c*sizeof(float));
     float* enclave_label_storage = (float*)malloc(r*sizeof(float));
     int count = 0;
+    double start, end;
+    ocall_get_time(&start);
     for(int i=0; i<keyList.size(); i+=1){
         Key* key = keyList[i];
         uint64_t hash = xxsha256(key, c, eid);
@@ -216,18 +267,25 @@ void ecall_training(){
             count++;
         }
     }
+    ocall_get_time(&end);
+    printf("Total data load time for %d is %.8f ms and each need %.8f ms\n", r, end-start, (end-start)/r);
     printf("loaded data count is %d\n", count);
 
-    mlp = new MLP(network, 0.1f, 5000);
+    mlp = new MLP(network, 0.01f, 1000);
     mlp->setModel(model_storage[0]);
     for(int i=0; i<keyList.size(); i+=slice_size){
         int size = keyList.size()<i+slice_size?keyList.size():i+slice_size;
         int current_slice_size = keyList.size()<i+slice_size?keyList.size()%slice_size:slice_size;
+        slice_start_index.push_back(i);
         // printf("size is %d\n", size);
         slice_state.push_back(current_slice_size);
         // printf("current slice size is %d\n", slice_state.back());
-        mlp->train(enclave_data_storage, enclave_label_storage, 5, size, model_storage[i/slice_size+1]);
+        mlp->train(enclave_data_storage, enclave_label_storage, 22, size, model_storage[i/slice_size+1]);
+        ocall_get_time(&start);
         mlp->saveModel(model_storage[i/slice_size+1]);
+        hashModel(model_storage[i/slice_size+1], keyList[i]);
+        ocall_get_time(&end);
+        printf("Save time for model %d is %.8f ms\n", i/slice_size+1, end-start);
         // printf("%f\n", *(model_storage[0]->fc1w+1));
         // printf("%f\n", *(model_storage[1]->fc1w+1));
         printf("Save model %d\n", i/slice_size+1);
@@ -260,9 +318,9 @@ void ecall_training(){
 void ecall_predict(float* data, float* label, int size){
     // mlp->setModel(model_storage[5]);
     int correct = 0;
-    for(int i=0; i<size; i+=5000){
+    for(int i=0; i<size; i+=1000){
         int start = i;
-        int end = i+5000<size?i+5000:size;
+        int end = i+1000<size?i+1000:size;
         int batch = end-start;
         vector<float> input(data+start*c, data+end*c);
         vector<float> result = mlp->inference(input);
@@ -307,13 +365,23 @@ void ecall_unlearning(uint64_t kid){
             //unlearning
             int startSlice = temp->getSliceNum();
             // printf("start slice is %d\n", startSlice);
+            double start, end;
+            ocall_get_time(&start);
+            if(startSlice>0){
+                if(verifyModel(model_storage[startSlice], keyList[slice_start_index[startSlice-1]]) == 0){
+                    printf("verifyed\n");
+                }
+            }
             mlp->setModel(model_storage[startSlice]);
+            ocall_get_time(&end);
+            printf("Model load time for %d is %.8f ms\n", startSlice, end-start);
             int size = 0;
             for(int i=0; i<slice_state.size(); i++){
                 size+=slice_state[i];
                 if(i>=startSlice){
-                    mlp->train(data_storage, label_storage, 5, size, model_storage[i+1]);
+                    mlp->train(data_storage, label_storage, 22, size, model_storage[i+1]);
                     mlp->saveModel(model_storage[i+1]);
+                    hashModel(model_storage[i+1], keyList[slice_start_index[i]]);
                     printf("Save model %d\n", i+1);
                 }
             }
